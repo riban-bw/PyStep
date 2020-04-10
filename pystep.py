@@ -5,19 +5,27 @@ import threading
 import jack
 
 # Global variables
-clock = 0
-status = "STOP"
-playHead = 0
-playCursor = None
-pattern = {}
-pattern_grid = {}
-trackHeight=20
-highlight = (0,0)
+clock = 0 # Count of MIDI clock pulses since last step [0..24]
+status = "STOP" # Play status [STOP | PLAY]
+playHead = 0 # Play head position in steps [0..gridColumns]
+playCursor = None # Rectangle representing play head position
+pattern = {} # Dictionary of notes in pattern TODO: This is currently tied to grid
+pattern_grid = {} # Dictionary of rectangle widget IDs indexed by (row,column)
+trackHeight=20 # Grid row height in pixels
+gridRows = 16 # Quantity of rows in grid
+gridColumns = 16 # Quantity of columns in grid
+keyOrigin = 60 # MIDI note number of top row in grid
+highlight = (0,0) # Location of highlighted cell (row, column)
+# keys: Array of keys in octave, indexed by offset from C with array of: isWhite, start y-offset, end y-offset
+keys = ((True, 0, 1.5),(False, 0, 1),(True, -0.5, 1.5),(False, 0, 1),(True, -0.5, 1.5),(False, 0, 1),(True, -0.5, 1),(True, 0, 1.5),(False, 0, 1),(True, -0.5, 1.5),(False, 0, 1),(True, -0.5, 1))
 
+# Function to draw the play head cursor
 def drawPlayhead():
-    gridCanvas.coords(playCursor, playHead*40, 12*trackHeight, playHead*40 + 40, 12*trackHeight + 10)
+    gridCanvas.coords(playCursor, playHead*40, gridRows*trackHeight, playHead*40 + 40, gridRows*trackHeight + 10)
     gridCanvas.update()
 
+# Function to handle mouse click / touch
+#   event: Mouse event
 def onCanvasClick(event):
     global highlight
     closest = event.widget.find_closest(event.x, event.y)
@@ -34,6 +42,10 @@ def onCanvasClick(event):
                 drawCell(row, col, True)
                 highlight = (row, col)
 
+# Function to draw a grid cell
+#   row: Row index
+#   col: Column index
+#   selected: True if cell is selected (default: False)
 def drawCell(row, col, selected = False):
     global pattern_grid
     value = 255 - pattern[row,col]*2 if (row,col) in pattern else 255
@@ -50,15 +62,24 @@ def drawCell(row, col, selected = False):
         pattern_grid[row,col] = gridCanvas.create_rectangle(col*40,row*trackHeight,col*40+39,row*trackHeight+19, fill=fill, outline=on, tags=(row,col))
         gridCanvas.tag_bind(pattern_grid[row,col], '<Button-1>', onCanvasClick)
 
-
+# Function to draw grid
+#   rows: Quantity of rows
+#   columns: Quantity of columns
 def drawGrid(rows, cols):
     for row in range(rows):
         for col in range(cols):
             drawCell(col, row)
 
+# Function to send MIDI note on
+#   note: MIDI note number
+#   velocity: MIDI velocity
+#   NOTE: Which channel?
 def noteOn(note, velocity):
     print("Note on:", note, velocity)
+    #TODO: Implement noteOn
 
+# Function to handle JACK process events
+#   frames: Quantity of frames since last process event
 def onJackProcess(frames):
     global clock, status, playHead
     for offset, data in midiInput.incoming_midi_events():
@@ -96,28 +117,35 @@ def onJackProcess(frames):
             status = "STOP"
             gridCanvas.itemconfig(playCursor, state = 'hidden')
 
-def drawKey(note, offset):
-    octave = note // 12
-    relNote = note % 12
-    if relNote in (0,2,4,5,7,9,11):
-        print("White note")
-    else:
-        print("Black note")
+# Function to draw piano-roll
+#   baseNote: MIDI note number of first (top) note to display
+def drawPianoroll(baseNote):
+    for offset in range(0, gridRows):
+        print("Offset:", offset)
+        key = keys[(offset + baseNote) % 12]
+        print("Key:",key)
+        if key[0]:
+            # White key
+            x1 = 0
+            y1 = trackHeight * (offset + key[1])
+            x2 = 100
+            y2 = trackHeight * (offset + key[2])
+            print("Drawing white key at offset %d: (%d,%d) (%d,%d)" % (offset,x1,y1,x2,y2))
+            pianoRoll.create_rectangle(x1, y1, x2, y2, fill="white")
+    for offset in range(0, gridRows):
+        key = keys[(offset + baseNote) % 12]
+        if not key[0]:
+            # Black key
+            x1 = 0
+            y1 = trackHeight * (offset + key[1])
+            x2 = 60
+            y2 = trackHeight * (offset + key[2])
+            pianoRoll.create_rectangle(x1, y1, x2, y2, fill="black")
 
-def drawKeys(baseNote):
-    pianoRoll.create_rectangle(0,0,100,trackHeight*1.5, fill="white")
-    pianoRoll.create_rectangle(0,trackHeight*1.5,100,trackHeight*3.5, fill="white")
-    pianoRoll.create_rectangle(0,trackHeight*3.5,100,trackHeight*5.5, fill="white")
-    pianoRoll.create_rectangle(0,trackHeight*5.5,100,trackHeight*7.5, fill="white")
-    pianoRoll.create_rectangle(0,trackHeight*6.5,100,trackHeight*8.5, fill="white")
-    pianoRoll.create_rectangle(0,trackHeight*8.5,100,trackHeight*10.5, fill="white")
-    pianoRoll.create_rectangle(0,trackHeight*10.5,100,trackHeight*12, fill="white")
-    pianoRoll.create_rectangle(0,trackHeight,60,trackHeight*2, fill="black")
-    pianoRoll.create_rectangle(0,trackHeight*3,60,trackHeight*4, fill="black")
-    pianoRoll.create_rectangle(0,trackHeight*5,60,trackHeight*6, fill="black")
-    pianoRoll.create_rectangle(0,trackHeight*8,60,trackHeight*9, fill="black")
-    pianoRoll.create_rectangle(0,trackHeight*10,60,trackHeight*11, fill="black")
-
+# Function to update highlight of currently selected cell
+#   row: Row of selected cell
+#   col: Column index of selected cell
+# NOTE: Removes previous highlight
 def updateHighlight(row, col):
     global highlight
     drawCell(highlight[0], highlight[1])
@@ -127,6 +155,8 @@ def updateHighlight(row, col):
     drawCell(highlight[0], highlight[1], True)
     gridCanvas.update()
 
+# Function to handle keyboard key press event
+#   event: Key event
 def onKeyPress(event):
     if event.keycode == 98:
         #UP
@@ -134,7 +164,7 @@ def onKeyPress(event):
             updateHighlight(highlight[0] - 1, highlight[1])
     elif event.keycode == 104:
         #DOWN
-        if highlight[0] < 11:
+        if highlight[0] < gridRows - 1:
             updateHighlight(highlight[0] + 1, highlight[1])
     elif event.keycode == 100:
         #LEFT
@@ -142,33 +172,33 @@ def onKeyPress(event):
             updateHighlight(highlight[0], highlight[1] - 1)
     elif event.keycode == 102:
         #RIGHT
-        if highlight[1] < 15:
+        if highlight[1] < gridColumns - 1:
             updateHighlight(highlight[0], highlight[1] + 1)
-    
 
 # Main application
 if __name__ == "__main__":
     # Create GUI
     window = tk.Tk()
     pianoRoll = tk.Canvas(window, width=100, height=400, bg="white")
-    drawKeys(60)
+    drawPianoroll(keyOrigin)
     pianoRoll.grid(row=0, column=0)
     gridCanvas = tk.Canvas(window, width=800, height=400, bg="#eeeeee")
     gridCanvas.grid(row=0, column=1)
-    playCursor = gridCanvas.create_rectangle(0,12*trackHeight,40,12*trackHeight+10, fill="green", state="hidden")
+    playCursor = gridCanvas.create_rectangle(0,gridRows*trackHeight,40,gridRows*trackHeight+10, fill="green", state="hidden")
 
     # For test populate pattern with some stuff
-    for row in range(12):
-        for col in range(16):
+    for row in range(gridRows):
+        for col in range(gridColumns):
             if col == row:
                 pattern[row,col] = row * 8
 
-    drawGrid(16,12)
+    drawGrid(gridColumns,gridRows)
     window.bind("<Key>", onKeyPress)
 
     # Set up JACK interface
     jackClient = jack.Client("zynthstep")
     midiInput = jackClient.midi_inports.register("input")
+    midiOutput = jackClient.midi_outports.register("output")
     jackClient.set_process_callback(onJackProcess)
     jackClient.activate()
     #TODO: Remove auto test connection 
