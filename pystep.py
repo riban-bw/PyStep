@@ -3,6 +3,7 @@ import time
 import tkinter as tk
 import threading
 import jack
+import json
 
 # Global variables
 clock = 0 # Count of MIDI clock pulses since last step [0..24]
@@ -87,14 +88,12 @@ def drawGrid(cols, rows):
 #   note: Array (MIDI note number, MIDI velocity)
 #   NOTE: Which channel?
 def noteOn(note):
-    print("Note on:", 0, (0x90, note[0], note[1]))
     midiOutput.write_midi_event(0, (0x90, note[0], note[1]))
 
 # Function to send MIDI note off
 #   note: Array (MIDI note number, MIDI velocity)
 #   NOTE: Which channel?
 def noteOff(note):
-    print("Note off:", 0, (0x80, note[0], note[1]))
     midiOutput.write_midi_event(0, (0x80, note[0], note[1]))
 
 # Function to handle JACK process events
@@ -196,10 +195,11 @@ def onKeyPress(event):
         #SPACE
         pass
     else:
-        print("Keypress code:", event.keycode)
+        print("Unhandled keypress code:", event.keycode)
 
 # Main application
 if __name__ == "__main__":
+    print("Starting PyStep...")
     # Create GUI
     window = tk.Tk()
     pianoRoll = tk.Canvas(window, width=100, height=400, bg="white")
@@ -210,10 +210,15 @@ if __name__ == "__main__":
     playCursor = gridCanvas.create_rectangle(0,gridRows*trackHeight,40,gridRows*trackHeight+10, fill="green", state="hidden")
 
     # For test populate pattern with some stuff
-    for col in range(gridColumns):
-        for row in range(gridRows):
-            if col == row:
-                pattern[col].append([row + 60, row * 8])
+    try:
+        with open('pattern.json') as f:
+            pattern = json.load(f)["pattern 1"]
+    except:
+        print('Failed to load pattern file')
+#    for col in range(gridColumns):
+#        for row in range(gridRows):
+#            if col == row:
+#                pattern[col].append([row + 60, row * 8])
     drawGrid(gridColumns,gridRows)
     window.bind("<Key>", onKeyPress)
 
