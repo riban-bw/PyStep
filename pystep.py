@@ -50,7 +50,7 @@ def toggleEvent(step, note):
             patterns[pattern][step].remove(event)
             found = True
             break
-    if not found:
+    if not found and note[1]:
         patterns[pattern][step].append(note)
     if note[0] >= keyOrigin and note[0] < keyOrigin + gridRows:
         selectCell(step, note[0] - keyOrigin)
@@ -68,10 +68,10 @@ def drawCell(col, row):
     fill = "#%02x%02x%02x" % (velocity, velocity, velocity)
     if selectedCell == (col, row):
         outline = '#00ff00'
-    elif velocity == 0:
-        outline = 'black'
-    else:
+    elif velocity == 255:
         outline = '#dddddd'
+    else:
+        outline = 'black'
     cell = gridCanvas.find_withtag("%d,%d"%(col,row))
     if cell:
         # Update existing cell
@@ -97,7 +97,7 @@ def drawGrid():
         if key in (0,2,4,5,7,9,11):
             pianoRoll.itemconfig(row + 1, fill="white")
             if key == 0:
-                pianoRoll.create_text((pianoRollWidth / 2, trackHeight * (gridRows - row - 0.5)), text="C%d" % ((keyOrigin + row) // 12 - 1), tags="notename")
+                pianoRoll.create_text((pianoRollWidth / 2, trackHeight * (gridRows - row - 0.5)), text="C%d (%d)" % ((keyOrigin + row) // 12 - 1, keyOrigin + row), tags="notename")
         else:
             pianoRoll.itemconfig(row + 1, fill="black")
 
@@ -192,6 +192,14 @@ def savePattern():
     with open('pattern.json', 'w') as f:
         json.dump(patterns, f)
 
+# Function to set input velocity
+#   velocity: New value for velocity [0..127]
+def setInputVelocity(velocity):
+    global inputVel
+    if velocity >= 0 and velocity <= 127:
+        inputVel = velocity
+        titleCanvas.itemconfig("inputVel", text="Velocity: %d" % inputVel)
+
 # Function to handle keyboard key press event
 #   event: Key event
 def onKeyPress(event):
@@ -214,12 +222,18 @@ def onKeyPress(event):
     elif event.keycode == 65:
         #SPACE
         pass
-    elif event.keycode == 82:
-        #- Select previous pattern
+    elif event.keycode == 59:
+        #< Select previous pattern
         loadPattern(pattern - 1)
-    elif event.keycode == 86:
-        #+ Select next pattern
+    elif event.keycode == 60:
+        #> Select next pattern
         loadPattern(pattern + 1)
+    elif event.keycode == 82:
+        #- Reduce input velocity
+        setInputVelocity(inputVel - 1)
+    elif event.keycode == 86:
+        #+ Increase input velocity
+        setInputVelocity(inputVel + 1)
     elif event.keycode == 39:
         #S
         savePattern()
@@ -256,7 +270,7 @@ if __name__ == "__main__":
     except:
         print('Failed to load pattern file')
         patterns = [[[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[]]] # Default to 16 steps
-    trackHeight = 0.9 * displayHeight/ (gridRows + 1)
+    trackHeight = 0.9 * displayHeight / (gridRows + 1)
     pianoRollWidth = displayWidth * 0.1
     # Create GUI
     window = tk.Tk()
@@ -264,6 +278,7 @@ if __name__ == "__main__":
     titleCanvas = tk.Canvas(window, width=displayWidth, height=displayHeight * 0.1, bg="#70819e")
     titleCanvas.grid(row=0, column=0, columnspan=2)
     titleCanvas.create_text(2,2,text="Pattern: %d" % pattern, anchor="nw", font=tkFont.Font(family="Times Roman", size=20), tags="lblPattern")
+    titleCanvas.create_text(displayWidth - 2, 2, text="Velocity: %d" % inputVel, anchor="ne", font=tkFont.Font(family="Times Roman", size=16), tags="inputVel")
     # Draw step grid
     pianoRoll = tk.Canvas(window, width=pianoRollWidth, height=gridRows * trackHeight, bg="white")
     pianoRoll.grid(row=1, column=0)
