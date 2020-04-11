@@ -9,79 +9,99 @@ clock = 0 # Count of MIDI clock pulses since last step [0..24]
 status = "STOP" # Play status [STOP | PLAY]
 playHead = 0 # Play head position in steps [0..gridColumns]
 playCursor = None # Rectangle representing play head position
-pattern = {} # Dictionary of notes in pattern TODO: This is currently tied to grid
+pattern = [[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[]] # Array of notes in pattern, indexed by step: each step is array of events, each event is array of (note,velocity)
 pattern_grid = {} # Dictionary of rectangle widget IDs indexed by (row,column)
 trackHeight=20 # Grid row height in pixels
 gridRows = 16 # Quantity of rows in grid
 gridColumns = 16 # Quantity of columns in grid
 keyOrigin = 60 # MIDI note number of top row in grid
-highlight = (0,0) # Location of highlighted cell (row, column)
+selectedCell = (0,0) # Location of selectedCelled cell (row, column)
 # keys: Array of keys in octave, indexed by offset from C with array of: isWhite, start y-offset, end y-offset
 keys = ((True, 0, 1.5),(False, 0, 1),(True, -0.5, 1.5),(False, 0, 1),(True, -0.5, 1.5),(False, 0, 1),(True, -0.5, 1),(True, 0, 1.5),(False, 0, 1),(True, -0.5, 1.5),(False, 0, 1),(True, -0.5, 1))
+inputVel = 100
 
 # Function to draw the play head cursor
 def drawPlayhead():
     gridCanvas.coords(playCursor, playHead*40, gridRows*trackHeight, playHead*40 + 40, gridRows*trackHeight + 10)
-    gridCanvas.update()
 
 # Function to handle mouse click / touch
 #   event: Mouse event
 def onCanvasClick(event):
-    global highlight
     closest = event.widget.find_closest(event.x, event.y)
     for row,col in pattern_grid:
-        if pattern_grid[(row,col)] == closest[0]:
-            if((row,col) in pattern):
-                del pattern[(row,col)]
-                drawCell(highlight[0], highlight[1])
-                drawCell(row, col, True)
-                highlight = (row, col)
-            else:
-                pattern[(row,col)] = 100 #TODO Use current input value
-                drawCell(highlight[0], highlight[1])
-                drawCell(row, col, True)
-                highlight = (row, col)
+        if pattern_grid[(col,row)] == closest[0]:
+            # TODO: Should be better way to find cell's coords!!!
+            toggleEvent(col, [row + keyOrigin, inputVel])
+
+# Function to toggle note event
+#   step: step (column) index
+#   note: note list [note, velocity]
+def toggleEvent(step, note):
+    global selectedCell
+    if step > gridRows or step > gridColumns:
+        return
+    found = False
+    for event in pattern[step]:
+        if event[0] == note[0]:
+            pattern[step].remove(event)
+            found = True
+            break
+    if not found:
+        pattern[step].append(note)
+    if note[0] >= keyOrigin and note[0] < keyOrigin + gridRows:
+        selectCell(step, note[0] - keyOrigin)
 
 # Function to draw a grid cell
-#   row: Row index
 #   col: Column index
-#   selected: True if cell is selected (default: False)
-def drawCell(row, col, selected = False):
+#   row: Row index
+def drawCell(col, row):
     global pattern_grid
-    value = 255 - pattern[row,col]*2 if (row,col) in pattern else 255
+    value = 255 # White
+    for note in pattern[col]:
+        if note[0] == row + keyOrigin:
+            # Found cell with note
+            value = 255 - note[1]*2
     fill = "#%02x%02x%02x" % (value,value,value)
-    if selected:
-        on = '#883399'
+    if selectedCell == (col, row):
+        on = '#00ff00'
     elif value == 0:
         on = 'black'
     else:
         on = '#dddddd'
-    if (row,col) in pattern_grid:
-        gridCanvas.itemconfig(pattern_grid[(row,col)], fill=fill, outline=on)
+    if (col,row) in pattern_grid:
+        gridCanvas.itemconfig(pattern_grid[(col,row)], fill=fill, outline=on)
     else:
-        pattern_grid[row,col] = gridCanvas.create_rectangle(col*40,row*trackHeight,col*40+39,row*trackHeight+19, fill=fill, outline=on, tags=(row,col))
-        gridCanvas.tag_bind(pattern_grid[row,col], '<Button-1>', onCanvasClick)
+        pattern_grid[col,row] = gridCanvas.create_rectangle(col*40,row*trackHeight,col*40+39,row*trackHeight+19, fill=fill, outline=on, tags=(row,col))
+        gridCanvas.tag_bind(pattern_grid[col,row], '<Button-1>', onCanvasClick)
+
 
 # Function to draw grid
-#   rows: Quantity of rows
 #   columns: Quantity of columns
-def drawGrid(rows, cols):
-    for row in range(rows):
-        for col in range(cols):
+#   rows: Quantity of rows
+def drawGrid(cols, rows):
+    for col in range(cols):
+        for row in range(rows):
             drawCell(col, row)
 
 # Function to send MIDI note on
-#   note: MIDI note number
-#   velocity: MIDI velocity
+#   note: Array (MIDI note number, MIDI velocity)
 #   NOTE: Which channel?
-def noteOn(note, velocity):
-    print("Note on:", note, velocity)
-    #TODO: Implement noteOn
+def noteOn(note):
+    print("Note on:", 0, (0x90, note[0], note[1]))
+    midiOutput.write_midi_event(0, (0x90, note[0], note[1]))
+
+# Function to send MIDI note off
+#   note: Array (MIDI note number, MIDI velocity)
+#   NOTE: Which channel?
+def noteOff(note):
+    print("Note off:", 0, (0x80, note[0], note[1]))
+    midiOutput.write_midi_event(0, (0x80, note[0], note[1]))
 
 # Function to handle JACK process events
 #   frames: Quantity of frames since last process event
 def onJackProcess(frames):
     global clock, status, playHead
+    midiOutput.clear_buffer();
     for offset, data in midiInput.incoming_midi_events():
         if data[0] == b'\xf8':
             # MIDI Clock
@@ -90,13 +110,13 @@ def onJackProcess(frames):
                 if clock >= 24:
                     # Time to process a time slot
                     clock = 0
+                    for note in pattern[playHead]:
+                        noteOff(note)
                     playHead = playHead + 1
                     if playHead > 15:
                         playHead = 0
-                    for row,col in pattern:
-                        if col == playHead:
-                            noteOn(row, pattern[row,col])
-                        #TODO Send note off
+                    for note in pattern[playHead]:
+                        noteOn(note)
                     drawPlayhead()
         elif data[0] == b'\xfa':
             # MIDI Start
@@ -121,16 +141,13 @@ def onJackProcess(frames):
 #   baseNote: MIDI note number of first (top) note to display
 def drawPianoroll(baseNote):
     for offset in range(0, gridRows):
-        print("Offset:", offset)
         key = keys[(offset + baseNote) % 12]
-        print("Key:",key)
         if key[0]:
             # White key
             x1 = 0
             y1 = trackHeight * (offset + key[1])
             x2 = 100
             y2 = trackHeight * (offset + key[2])
-            print("Drawing white key at offset %d: (%d,%d) (%d,%d)" % (offset,x1,y1,x2,y2))
             pianoRoll.create_rectangle(x1, y1, x2, y2, fill="white")
     for offset in range(0, gridRows):
         key = keys[(offset + baseNote) % 12]
@@ -142,38 +159,44 @@ def drawPianoroll(baseNote):
             y2 = trackHeight * (offset + key[2])
             pianoRoll.create_rectangle(x1, y1, x2, y2, fill="black")
 
-# Function to update highlight of currently selected cell
-#   row: Row of selected cell
+# Function to update selectedCell
 #   col: Column index of selected cell
-# NOTE: Removes previous highlight
-def updateHighlight(row, col):
-    global highlight
-    drawCell(highlight[0], highlight[1])
-    print("Highlight was %d,%d" % (highlight[0], highlight[1]))
-    highlight = (row, col)
-    print(" and now is %d,%d" % (row, col))
-    drawCell(highlight[0], highlight[1], True)
-    gridCanvas.update()
+#   row: Row index of selected cell
+# NOTE: Removes previous selectedCell
+def selectCell(col, row):
+    global selectedCell
+    previousSelected = selectedCell
+    selectedCell = (col, row)
+    drawCell(previousSelected[0], previousSelected[1])
+    drawCell(selectedCell[0], selectedCell[1])
 
 # Function to handle keyboard key press event
 #   event: Key event
 def onKeyPress(event):
     if event.keycode == 98:
         #UP
-        if highlight[0]:
-            updateHighlight(highlight[0] - 1, highlight[1])
+        if selectedCell[1]:
+            selectCell(selectedCell[0], selectedCell[1] - 1)
     elif event.keycode == 104:
         #DOWN
-        if highlight[0] < gridRows - 1:
-            updateHighlight(highlight[0] + 1, highlight[1])
+        if selectedCell[1] < gridRows - 1:
+            selectCell(selectedCell[0], selectedCell[1] + 1)
     elif event.keycode == 100:
         #LEFT
-        if highlight[1]:
-            updateHighlight(highlight[0], highlight[1] - 1)
+        if selectedCell[0]:
+            selectCell(selectedCell[0] - 1, selectedCell[1])
     elif event.keycode == 102:
         #RIGHT
-        if highlight[1] < gridColumns - 1:
-            updateHighlight(highlight[0], highlight[1] + 1)
+        if selectedCell[0] < gridColumns - 1:
+            selectCell(selectedCell[0] + 1, selectedCell[1])
+    elif event.keycode == 36:
+        #ENTER
+        toggleEvent(selectedCell[0], [keyOrigin + selectedCell[1], inputVel])
+    elif event.keycode == 65:
+        #SPACE
+        pass
+    else:
+        print("Keypress code:", event.keycode)
 
 # Main application
 if __name__ == "__main__":
@@ -187,11 +210,10 @@ if __name__ == "__main__":
     playCursor = gridCanvas.create_rectangle(0,gridRows*trackHeight,40,gridRows*trackHeight+10, fill="green", state="hidden")
 
     # For test populate pattern with some stuff
-    for row in range(gridRows):
-        for col in range(gridColumns):
+    for col in range(gridColumns):
+        for row in range(gridRows):
             if col == row:
-                pattern[row,col] = row * 8
-
+                pattern[col].append([row + 60, row * 8])
     drawGrid(gridColumns,gridRows)
     window.bind("<Key>", onKeyPress)
 
@@ -203,5 +225,6 @@ if __name__ == "__main__":
     jackClient.activate()
     #TODO: Remove auto test connection 
     jackClient.connect("a2j:MidiSport 2x2 [20] (capture): MidiSport 2x2 MIDI 1", "zynthstep:input")
+    jackClient.connect("zynthstep:output", "ZynMidiRouter:main_in")
     # Here we go....
     window.mainloop()
