@@ -123,10 +123,10 @@ def setPlayState(command):
     global status, playHead
     if command == "START":
             print("MIDI START")
-            playHead = 0
-            clock = 0
+            playHead = gridColumns - 1
+            clock = 24
             status = "PLAY"
-            drawPlayhead()
+            playCanvas.coords("playCursor", 0, 0, stepWidth, trackHeight / 2)
             playCanvas.itemconfig("playCursor", state = 'normal')
     elif command == "CONTINUE":
             print("MIDI CONTINUE")
