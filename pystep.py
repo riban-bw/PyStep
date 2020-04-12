@@ -12,30 +12,33 @@ displayHeight = 400
 clock = 0 # Count of MIDI clock pulses since last step [0..24]
 status = "STOP" # Play status [STOP | PLAY]
 playHead = 0 # Play head position in steps [0..gridColumns]
-pattern = 0 # Index of current pattern
+pattern = 0 # Index of current pattern (zero indexed)
 # List of notes in selected pattern, indexed by step: each step is list of events, each event is list of (note,velocity)
 patterns = [] # List of patterns
 trackHeight = 20 # Grid row height in pixels (default 20)
 stepWidth = 40 # Grid column width in pixels (default 40)
 gridRows = 16 # Quantity of rows in grid (default 16)
+gridCanvas = None # Canvas to paint step grid
 gridColumns = 16 # Quantity of columns in grid (default 16)
 keyOrigin = 60 # MIDI note number of top row in grid
 selectedCell = (0,0) # Location of selected cell (column,row)
-inputVel = 100 # Velocity of new notes (default 100)
 pianoRollWidth = 60 # Width of pianoroll in pixels (default 60)
 titleCanvas = None
+menu = {'Pattern': {'min': 1, 'max': 1, 'value': 1}, 'Velocity': {'min': 0, 'max': 127, 'value':100}, 'Steps': {'min': 2, 'max': 32, 'value': 16}, 'MIDI Channel': {'min': 1, 'max': 16, 'value': 1}} #TODO: Get from persistent storage
+menuSelected = 'Velocity'
+menuSelectMode = False # True to change selected menu value, False to change menu selection
 
 # Function to draw the play head cursor
 def drawPlayhead():
     global playCanvas
-    playCanvas.coords("playCursor", 1 + playHead * stepWidth, 0, playHead * stepWidth + stepWidth, trackHeight)
+    playCanvas.coords("playCursor", 1 + playHead * stepWidth, 0, playHead * stepWidth + stepWidth, trackHeight / 2)
 
 # Function to handle mouse click / touch
 #   event: Mouse event
 def onCanvasClick(event):
     closest = event.widget.find_closest(event.x, event.y)
     tags = gridCanvas.gettags(closest)
-    toggleEvent(int(tags[0].split(',')[0]), [keyOrigin + int(tags[0].split(',')[1]), inputVel])
+    toggleEvent(int(tags[0].split(',')[0]), [keyOrigin + int(tags[0].split(',')[1]), menu['Velocity']['value']])
 
 # Function to toggle note event
 #   step: step (column) index
@@ -59,7 +62,7 @@ def toggleEvent(step, note):
 #   step: Column index
 #   note: Row index
 def drawCell(col, row):
-    if col > len(patterns[pattern]):
+    if col >= gridColumns:
         return
     velocity = 255 # White
     for note in patterns[pattern][col]:
@@ -78,13 +81,16 @@ def drawCell(col, row):
         gridCanvas.itemconfig(cell, fill=fill, outline=outline)
     else:
         # Create new cell
-        cell = gridCanvas.create_rectangle(1 + col * stepWidth, (gridRows - row) * trackHeight, (col + 1) * stepWidth - 1, (gridRows - row - 1) * trackHeight + 1, fill=fill, outline=outline, tags=("%d,%d"%(col,row)))
+        cell = gridCanvas.create_rectangle(2 + col * stepWidth, (gridRows - row) * trackHeight, (col + 1) * stepWidth - 2, (gridRows - row - 1) * trackHeight + 2, fill=fill, outline=outline, tags=("%d,%d"%(col,row)), width=2)
         gridCanvas.tag_bind(cell, '<Button-1>', onCanvasClick)
 
 # Function to draw grid
-#   columns: Quantity of columns
-#   rows: Quantity of rows
-def drawGrid():
+#   clearGrid: True to clear grid and create all new elements, False to reuse existing elements if they exist
+def drawGrid(clearGrid = False):
+    global gridCanvas, stepWidth
+    if clearGrid:
+        gridCanvas.delete(tk.ALL)
+        stepWidth = displayWidth * 0.9 / gridColumns
     # Delete existing note names
     for item in pianoRoll.find_withtag("notename"):
         pianoRoll.delete(item)
@@ -103,15 +109,36 @@ def drawGrid():
 
 # Function to send MIDI note on
 #   note: List (MIDI note number, MIDI velocity)
-#   NOTE: Which channel?
 def noteOn(note):
-    midiOutput.write_midi_event(0, (0x90, note[0], note[1]))
+    midiOutput.write_midi_event(0, (0x90 | (menu['MIDI Channel']['value'] - 1), note[0], note[1]))
 
 # Function to send MIDI note off
 #   note: List (MIDI note number, MIDI velocity)
-#   NOTE: Which channel?
 def noteOff(note):
-    midiOutput.write_midi_event(0, (0x80, note[0], note[1]))
+    midiOutput.write_midi_event(0, (0x80 | (menu['MIDI Channel']['value'] - 1), note[0], note[1]))
+
+# Function to control play head
+#   command: Playhead command ["STOP" | "START" | "CONTINUE"]
+def setPlayState(command):
+    global status, playHead
+    if command == "START":
+            print("MIDI START")
+            playHead = 0
+            clock = 0
+            status = "PLAY"
+            drawPlayhead()
+            playCanvas.itemconfig("playCursor", state = 'normal')
+    elif command == "CONTINUE":
+            print("MIDI CONTINUE")
+            status = "PLAY"
+            playCanvas.itemconfig("playCursor", state = 'normal')
+    elif command == "STOP":
+            print("MIDI STOP")
+            status = "STOP"
+            playCanvas.itemconfig("playCursor", state = 'hidden')
+            for note in patterns[pattern][playHead]:
+                noteOff(note)
+
 
 # Function to handle JACK process events
 #   frames: Quantity of frames since last process event
@@ -123,7 +150,7 @@ def onJackProcess(frames):
             # MIDI Clock
             if status == "PLAY":
                 clock = clock + 1
-                if clock >= 24:
+                if clock >= 6:
                     # Time to process a time slot
                     clock = 0
                     for note in patterns[pattern][playHead]:
@@ -136,24 +163,13 @@ def onJackProcess(frames):
                     drawPlayhead()
         elif data[0] == b'\xfa':
             # MIDI Start
-            print("MIDI START")
-            playHead = 0
-            clock = 0
-            status = "PLAY"
-            drawPlayhead()
-            playCanvas.itemconfig("playCursor", state = 'normal')
+            setPlayState("START")
         elif data[0] == b'\xfb':
             # Midi Continue
-            print("MIDI CONTINUE")
-            status = "PLAY"
-            playCanvas.itemconfig("playCursor", state = 'normal')
+            setPlayState("CONTINUE")
         elif data[0] == b'\xfc':
             # MIDI Stop
-            print("MIDI STOP")
-            status = "STOP"
-            playCanvas.itemconfig("playCursor", state = 'hidden')
-            for note in patterns[pattern][playHead]:
-                noteOff(note)
+            setPlayState("STOP")
 
 # Function to draw pianoroll keys (does not fill key colour)
 def drawPianoroll():
@@ -192,18 +208,72 @@ def savePattern():
     with open('pattern.json', 'w') as f:
         json.dump(patterns, f)
 
-# Function to set input velocity
-#   velocity: New value for velocity [0..127]
-def setInputVelocity(velocity):
-    global inputVel
-    if velocity >= 0 and velocity <= 127:
-        inputVel = velocity
-        titleCanvas.itemconfig("inputVel", text="Velocity: %d" % inputVel)
+# Function to set menu value
+#   menuItem: Name of menu item
+#   value: Value to set menu item to
+def setMenuValue(menuItem, value):
+    global menu, gridColumns
+    if menuItem not in menu:
+        return
+    if value < menu[menuItem]['min'] or value > menu[menuItem]['max']:
+        return
+    menu[menuItem]['value'] = value
+    refreshMenu()
+    if menuItem == 'Pattern':
+        loadPattern(value - 1)
+    if menuItem == 'Steps':
+        for step in range(gridColumns, value):
+            patterns[pattern].append([])
+        gridColumns = value
+        drawGrid(True)
+
+# Function to toggle menu mode between menu selection and data entry
+def toggleMenuMode():
+    global menuSelectMode
+    menuSelectMode = not menuSelectMode
+    if menuSelectMode:
+        # Value edit mode
+        titleCanvas.itemconfig("rectMenu", fill="#e8fc03")
+    else:
+        # Menu item select mode
+        titleCanvas.itemconfig("rectMenu", fill="#70819e")
+        if menuSelected == 'Steps':
+            removeObsoleteSteps()
+    refreshMenu()
+
+# Function to remove steps that are not within current display window
+def removeObsoleteSteps():
+    patterns[pattern] = patterns[pattern][:gridColumns]
+
+# Function to update menu display
+def refreshMenu():
+    titleCanvas.itemconfig("lblMenu", text="%s: %s" % (menuSelected, menu[menuSelected]['value']))
+    titleCanvas.coords("rectMenu", titleCanvas.bbox("lblMenu"))
+
+# Function to handle menu down
+#   up: True for menu up, False for menu down
+def onMenuChange(up):
+    global menuSelected
+    delta = 1 if up else -1
+    if menuSelectMode:
+        # Set menu value
+        setMenuValue(menuSelected, menu[menuSelected]['value'] + delta)
+    else:
+        # Select menu item
+        keys = list(menu.keys())
+        for index in range(len(keys)):
+            if menuSelected == keys[index]:
+                if up and index >= len(keys) - 1:
+                    return
+                elif not up and index < 1:
+                    return
+                menuSelected = keys[index + delta]
+                refreshMenu()
+                return
 
 # Function to handle keyboard key press event
 #   event: Key event
 def onKeyPress(event):
-    global pattern
     if event.keycode == 98:
         #UP
         selectCell(selectedCell[0], selectedCell[1] + 1)
@@ -216,24 +286,30 @@ def onKeyPress(event):
     elif event.keycode == 102:
         #RIGHT
         selectCell(selectedCell[0] + 1, selectedCell[1])
-    elif event.keycode == 36:
+    elif event.keycode == 36 or event.keycode == 108:
         #ENTER
-        toggleEvent(selectedCell[0], [keyOrigin + selectedCell[1], inputVel])
+        toggleMenuMode()
+    elif event.keycode == 82:
+        #- Menu down
+        onMenuChange(False)
+    elif event.keycode == 86:
+        #+ Menu up
+        onMenuChange(True)
     elif event.keycode == 65:
         #SPACE
-        pass
+        toggleEvent(selectedCell[0], [keyOrigin + selectedCell[1], menu['Velocity']['value']])
+    elif event.keycode == 33:
+        #P - Play / stop
+        if status == "STOP":
+            setPlayState("START")
+        else:
+            setPlayState("STOP")
     elif event.keycode == 59:
-        #< Select previous pattern
-        loadPattern(pattern - 1)
+        #<
+        pass
     elif event.keycode == 60:
-        #> Select next pattern
-        loadPattern(pattern + 1)
-    elif event.keycode == 82:
-        #- Reduce input velocity
-        setInputVelocity(inputVel - 1)
-    elif event.keycode == 86:
-        #+ Increase input velocity
-        setInputVelocity(inputVel + 1)
+        #>
+        pass
     elif event.keycode == 39:
         #S
         savePattern()
@@ -247,18 +323,12 @@ def loadPattern(index):
         return
     pattern = index
     gridColumns = len(patterns[pattern])
+    menu['Steps']['value'] = gridColumns
     if playHead >= gridColumns:
         playHead = 0
-    stepWidth = displayWidth * 0.9 / gridColumns
-    try:
-        gridCanvas.destroy()
-    except:
-        pass # This will fail first time - don't worry
-    gridCanvas = tk.Canvas(window, width=gridColumns * stepWidth, height=gridRows * trackHeight, bg="#eeeeee")
-    gridCanvas.grid(row=1, column=1)
-    drawGrid()
+    drawGrid(True)
     playCanvas.config(width=gridColumns * stepWidth)
-    titleCanvas.itemconfig("lblPattern", text="Pattern: %d" % pattern)
+    titleCanvas.itemconfig("lblPattern", text="Pattern: %d" % (pattern + 1))
 
 # Main application
 if __name__ == "__main__":
@@ -270,25 +340,33 @@ if __name__ == "__main__":
     except:
         print('Failed to load pattern file')
         patterns = [[[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[]]] # Default to 16 steps
+    menu['Pattern']['max'] = len(patterns)
+    if menu['Pattern']['value'] > menu['Pattern']['max']:
+        menu['Pattern']['value'] = menu['Pattern']['max']
     trackHeight = 0.9 * displayHeight / (gridRows + 1)
     pianoRollWidth = displayWidth * 0.1
     # Create GUI
     window = tk.Tk()
+    gridCanvas = tk.Canvas(window, width=displayWidth * 0.9, height=trackHeight * gridRows)
+    gridCanvas.grid(row=1, column=1)
     # Draw title bar
     titleCanvas = tk.Canvas(window, width=displayWidth, height=displayHeight * 0.1, bg="#70819e")
     titleCanvas.grid(row=0, column=0, columnspan=2)
-    titleCanvas.create_text(2,2,text="Pattern: %d" % pattern, anchor="nw", font=tkFont.Font(family="Times Roman", size=20), tags="lblPattern")
-    titleCanvas.create_text(displayWidth - 2, 2, text="Velocity: %d" % inputVel, anchor="ne", font=tkFont.Font(family="Times Roman", size=16), tags="inputVel")
-    # Draw step grid
+    titleCanvas.create_text(2,2, anchor="nw", font=tkFont.Font(family="Times Roman", size=20), tags="lblPattern")
+    lblMenu = titleCanvas.create_text(displayWidth - 2, 2, anchor="ne", font=tkFont.Font(family="Times Roman", size=16), tags="lblMenu")
+    rectMenu = titleCanvas.create_rectangle(titleCanvas.bbox(lblMenu), fill="#70819e", width=0, tags="rectMenu")
+    titleCanvas.tag_lower(rectMenu, lblMenu)
+    refreshMenu()
+    # Draw step grid including pianoroll
     pianoRoll = tk.Canvas(window, width=pianoRollWidth, height=gridRows * trackHeight, bg="white")
     pianoRoll.grid(row=1, column=0)
     drawPianoroll()
     # Draw playhead
     playCanvas = tk.Canvas(window, height=trackHeight, bg="#eeeeee")
-    playCanvas.create_rectangle(0, 0, stepWidth, trackHeight, fill="green", state="hidden", tags="playCursor")
+    playCanvas.create_rectangle(0, 0, stepWidth, trackHeight / 2, fill="green", state="hidden", tags="playCursor")
     playCanvas.grid(row=2, column=1)
 
-    loadPattern(0) #TODO: Get last pattern from persistent storage
+    loadPattern(menu['Pattern']['value'] - 1)
     window.bind("<Key>", onKeyPress)
 
     # Set up JACK interface
